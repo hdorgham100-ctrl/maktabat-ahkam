@@ -8727,6 +8727,10 @@ img,video,canvas{max-width:100%}
   #appHeader .app-header-controls > button{width:30px!important;height:30px!important;min-width:30px!important}
 }
 
+/* أسماء أعمدة العليا في قايمة الاختيار */
+.column-option[data-court-label]{font-size:0!important}
+.column-option[data-court-label]::before{content:attr(data-court-label);font-size:14px;font-weight:700}
+
 </style>
 <link rel="manifest" href="manifest.webmanifest"/>
 <meta name="theme-color" content="#0f1f3d"/>
@@ -43800,11 +43804,30 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
     try { localStorage.setItem(KEY, m === 'olia' ? 'olia' : 'admin'); } catch(e) {}
     document.body && document.body.setAttribute('data-court', get());
     var b = document.getElementById('courtModeBtn'); if (b) b.innerHTML = btnLabel();
-    relabel();
+    relabel(); try { labelColumns(); } catch(e) {}
     if (byUser) { try { var n = document.createElement('div'); n.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:100000;background:#0f172a;color:#fff;padding:8px 16px;border-radius:999px;font-family:inherit;font-size:13px;box-shadow:0 6px 18px rgba(0,0,0,.25)'; n.textContent = m === 'olia' ? 'تم التبديل: المحكمة الإدارية العليا (رقم الطعن / الطاعن / المطعون ضده)' : 'تم التبديل: محاكم القضاء الإداري (رقم الدعوى / المدعي / المدعى عليه)'; document.body.appendChild(n); setTimeout(function(){ n.remove(); }, 2600); } catch(e) {} }
   };
   // أول ما يتقري رول عليا والمستخدم ما اختارش قبل كده → نحوّل لوضع العليا تلقائياً
-  window.__courtAutoOlia = function(){ if (!isSet()) window.__setCourtMode('olia', true); };
+  window.__courtAutoOlia = function(){ if (get() !== 'olia') window.__setCourtMode('olia', true); };
+  /* قايمة الأعمدة: «رقم الدعوي» تظهر «رقم الطعن» (العرض بس، القيمة الداخلية زي ما هي) */
+  var COL_LABELS = { 'رقم الدعوي': 'رقم الطعن', 'رقم الدعوى': 'رقم الطعن', 'المدعي': 'الطاعن', 'المدعي عليه': 'المطعون ضده', 'المدعى عليه': 'المطعون ضده' };
+  function labelColumns(){
+    var olia = get() === 'olia';
+    document.querySelectorAll('.column-option').forEach(function(el){
+      var t = el.textContent.trim(), lab = COL_LABELS[t];
+      if (olia && lab) { if (el.getAttribute('data-court-label') !== lab) { el.setAttribute('data-court-label', lab); el.title = lab + ' (' + t + ')'; } }
+      else if (el.hasAttribute('data-court-label')) { el.removeAttribute('data-court-label'); el.removeAttribute('title'); }
+    });
+    var inp = document.getElementById('selectedColumnName');
+    if (inp) {
+      var lab2 = olia && COL_LABELS[String(inp.value || '').trim()];
+      var tag = document.getElementById('courtColTag');
+      if (lab2) { if (!tag) { tag = document.createElement('span'); tag.id = 'courtColTag'; tag.style.cssText = 'display:inline-block;margin:4px 6px;padding:2px 10px;border-radius:999px;background:#b45309;color:#fff;font-size:12px;font-weight:700'; inp.insertAdjacentElement('afterend', tag); } tag.textContent = 'الاستخراج ب' + lab2; }
+      else if (tag) tag.remove();
+    }
+  }
+  try { new MutationObserver(function(){ clearTimeout(labelColumns.__t); labelColumns.__t = setTimeout(labelColumns, 60); }).observe(document.documentElement, { childList: true, subtree: true }); } catch(e) {}
+  setInterval(labelColumns, 1500);
   function init(){ addBtn(); if (document.body) document.body.setAttribute('data-court', get()); relabel(); }
   document.addEventListener('DOMContentLoaded', init); window.addEventListener('load', init); setTimeout(init, 1500); setInterval(addBtn, 3000);
 })();
@@ -43814,7 +43837,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 /* ===== التحديث التلقائي من جيت هاب + التثبيت كتطبيق + نقل البيانات ===== */
 (function(){
   'use strict';
-  var APP_VERSION = 51;
+  var APP_VERSION = 52;
   var HOME = 'https://hdorgham100-ctrl.github.io/maktabat-ahkam/';               // رابط البرنامج على جيت هاب
   window.__APP_VERSION = APP_VERSION;
   window.__APP_HOME = HOME;
