@@ -670,6 +670,35 @@
       else if (fn === OPS.transform) ctm = mulM(args, ctm);
       else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm.slice()); if (args && args[0]) ctm = mulM(args[0], ctm); }
       else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) ctm = stack.pop(); }
+      else if (fn === OPS.constructPath && typeof args[0] === 'number' && args[1] && args[1].length && args[1][0] && typeof args[1][0].length === 'number' && !Array.isArray(args[0])) {
+        // صيغة pdf.js 5+: [أمر الرسم, [بيانات المسار], حدود] — 0=moveTo 1=lineTo 2=curveTo 3=quadratic 4=closePath
+        var pd = args[1][0], pi = 0, cur2 = null, subs = [];
+        while (pi < pd.length) {
+          var code = pd[pi++];
+          if (code === 0) { cur2 = { pts: [[pd[pi], pd[pi+1]]] }; subs.push(cur2); pi += 2; }
+          else if (code === 1) { if (!cur2) { cur2 = { pts: [] }; subs.push(cur2); } cur2.pts.push([pd[pi], pd[pi+1]]); pi += 2; }
+          else if (code === 2) { pi += 6; cur2 = null; }
+          else if (code === 3) { pi += 4; cur2 = null; }
+          else if (code === 4) { if (cur2 && cur2.pts.length) cur2.pts.push(cur2.pts[0]); }
+          else break;
+        }
+        subs.forEach(function(sp){
+          var P = sp.pts;
+          // مستطيل مقفول بمحاور أفقية/رأسية → نعامله كمستطيل (عشان الخطوط المرسومة كمستطيلات رفيعة مملوءة)
+          if (P.length === 5 || P.length === 4) {
+            var xs = P.map(function(q){ return q[0]; }), ys = P.map(function(q){ return q[1]; });
+            var ux = xs.filter(function(v,i,a){ return a.findIndex(function(w){ return Math.abs(w-v) < 0.01; }) === i; });
+            var uy = ys.filter(function(v,i,a){ return a.findIndex(function(w){ return Math.abs(w-v) < 0.01; }) === i; });
+            if (ux.length === 2 && uy.length === 2) { path.push({ rect: [Math.min.apply(null,ux), Math.min.apply(null,uy), Math.abs(ux[1]-ux[0]), Math.abs(uy[1]-uy[0])] }); return; }
+          }
+          path.push(sp);
+        });
+        var pop = args[0];
+        if (pop === OPS.stroke || pop === OPS.closeStroke) flush(true, false);
+        else if (pop === OPS.fill || pop === OPS.eoFill) flush(false, true);
+        else if (pop === OPS.fillStroke || pop === OPS.eoFillStroke || pop === OPS.closeFillStroke || pop === OPS.closeEOFillStroke) flush(true, true);
+        else if (pop === OPS.endPath) path = [];
+      }
       else if (fn === OPS.constructPath) {
         var ops = args[0], co = args[1], ci = 0, cur = null;
         for (var j = 0; j < ops.length; j++) {
@@ -687,6 +716,24 @@
       else if (fn === OPS.fillStroke || fn === OPS.eoFillStroke || fn === OPS.closeFillStroke || fn === OPS.closeEOFillStroke) flush(true, true);
       else if (fn === OPS.endPath) path = [];
     }
+    // سد فجوات الخطوط الأفقية: إكسيل أحياناً بيرسم الحد السفلي لآخر صف على أجزاء (ناقص تحت بعض الأعمدة)
+    // لو فيه خط رأسي (حد عمود) واصل لنفس الارتفاع جوه الفجوة → الحد موجود فعلاً، نكمّله
+    try {
+      var tolY = 1.5, groups = {};
+      H.forEach(function(h){ var k = Math.round(h.y / tolY); (groups[k] = groups[k] || []).push(h); });
+      Object.keys(groups).forEach(function(k){
+        var segs = groups[k].slice().sort(function(p,q){ return p.a - q.a; });
+        var reach = segs[0].b;
+        for (var gi = 1; gi < segs.length; gi++) {
+          var g1 = reach, g2 = segs[gi].a, yy = segs[gi].y;
+          if (g2 - g1 > 3) {
+            var touch = V.filter(function(v){ return v.x > g1 + 1 && v.x < g2 - 1 && (Math.abs(v.a - yy) <= 2.5 || Math.abs(v.b - yy) <= 2.5); }).length;
+            if (touch >= 1) H.push({ y: yy, a: g1, b: g2 });
+          }
+          reach = Math.max(reach, segs[gi].b);
+        }
+      });
+    } catch (eBridge) {}
     return { H: H, V: V };
   }
   // دمج الأجزاء المتلاصقة على نفس الخط
@@ -43508,7 +43555,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
   }
   function fixTable(t){
     if (!t || !Array.isArray(t.headers) || !Array.isArray(t.data)) return false;
-    var changed = false, H = t.headers.slice(), D = t.data.map(function(r){ return r.slice(); });
+    var changed = false, H = t.headers.slice(), D = t.data.map(function(r){ var n = r.slice(); for (var k in r) if (isNaN(+k) && k !== 'length') n[k] = r[k]; return n; });
     // 1) «م الدعوي» أو عمود قيمه «71274 93» → عمودين
     for (var c = 0; c < H.length; c++) {
       var vals = D.map(function(r){ return String(r[c]||'').trim(); }).filter(Boolean);
@@ -43767,7 +43814,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 /* ===== التحديث التلقائي من جيت هاب + التثبيت كتطبيق + نقل البيانات ===== */
 (function(){
   'use strict';
-  var APP_VERSION = 50;
+  var APP_VERSION = 51;
   var HOME = 'https://hdorgham100-ctrl.github.io/maktabat-ahkam/';               // رابط البرنامج على جيت هاب
   window.__APP_VERSION = APP_VERSION;
   window.__APP_HOME = HOME;
