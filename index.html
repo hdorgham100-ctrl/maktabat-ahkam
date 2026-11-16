@@ -8697,6 +8697,8 @@ img,video,canvas{max-width:100%}
   #hardwareEngineStatusBadge{display:none!important}
   #appHeader .app-header-controls > button{width:34px!important;height:34px!important;min-width:34px!important;padding:0!important;border-radius:10px!important;font-size:15px!important}
   #appHeader #courtModeBtn{width:auto!important;padding:0 8px!important;font-size:11px!important}
+  #appHeader #appInstallBtn{width:34px!important;padding:0!important;font-size:16px!important}
+  #appInstallBtn .inst-l{display:none}
   #courtModeBtn .cm-l{display:none}
   #appNav.app-nav{display:flex!important;flex-wrap:nowrap!important;overflow-x:auto!important;overflow-y:hidden!important;gap:4px!important;padding:4px 2px 6px!important;scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
   #appNav.app-nav::-webkit-scrollbar{display:none}
@@ -43837,7 +43839,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 /* ===== التحديث التلقائي من جيت هاب + التثبيت كتطبيق + نقل البيانات ===== */
 (function(){
   'use strict';
-  var APP_VERSION = 52;
+  var APP_VERSION = 53;
   var HOME = 'https://hdorgham100-ctrl.github.io/maktabat-ahkam/';               // رابط البرنامج على جيت هاب
   window.__APP_VERSION = APP_VERSION;
   window.__APP_HOME = HOME;
@@ -43928,15 +43930,68 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
   }
   window.addEventListener('load', function(){ setTimeout(welcome, 3500); });
 
-  /* ===== 4) زرار «تثبيت كتطبيق» (أندرويد/كمبيوتر) ===== */
+  /* ===== 4) تثبيت البرنامج كتطبيق على الموبايل / التابلت / الكمبيوتر ===== */
   var deferred = null;
-  window.addEventListener('beforeinstallprompt', function(e){
-    e.preventDefault(); deferred = e;
-    var host = document.querySelector('.app-header-controls'); if (!host || document.getElementById('appInstallBtn')) return;
-    var b = document.createElement('button'); b.id = 'appInstallBtn'; b.type = 'button'; b.title = 'تثبيت البرنامج كتطبيق على الجهاز';
-    b.innerHTML = '📲'; b.style.cssText = 'border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;border-radius:10px;width:38px;height:38px;cursor:pointer;font-size:17px';
-    b.onclick = async function(){ if (!deferred) return; deferred.prompt(); try { await deferred.userChoice; } catch(e2) {} deferred = null; b.remove(); };
-    host.insertBefore(b, host.firstChild);
+  var ua = navigator.userAgent || '';
+  var isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var isAndroid = /Android/i.test(ua);
+  var isSafari = /Safari/i.test(ua) && !/CriOS|FxiOS|EdgiOS|Chrome/i.test(ua);
+  function isStandalone(){ try { return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true; } catch(e) { return false; } }
+  window.addEventListener('beforeinstallprompt', function(e){ e.preventDefault(); deferred = e; refreshInstallUI(); });
+  window.addEventListener('appinstalled', function(){ deferred = null; refreshInstallUI(); bar('appInstBar', '<div><b>✅ تم تثبيت البرنامج</b><br>هتلاقي أيقونة «مكتبة أحكام» على الشاشة الرئيسية.</div>', '#0f3d2e'); });
+  function step(n, html){ return '<div style="display:flex;gap:10px;align-items:flex-start;margin:8px 0"><span style="flex:0 0 26px;height:26px;border-radius:50%;background:#1e3a8a;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800">' + n + '</span><div>' + html + '</div></div>'; }
+  var SHARE_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" style="vertical-align:middle"><path fill="none" stroke="#2563eb" stroke-width="2" d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"/></svg>';
+  function guideHtml(){
+    if (!hosted) return '<p>التثبيت بيشتغل من <b>اللينك</b> بس، مش من الملف اللي على الجهاز.</p>' + step(1, 'افتح البرنامج من اللينك:<br><a href="' + HOME + '" target="_blank" rel="noopener" style="direction:ltr;display:inline-block">' + HOME + '</a>') + step(2, 'من هناك اضغط زرار «📲 تثبيت التطبيق» تاني.');
+    if (isIOS) {
+      var h = '';
+      if (!isSafari) h += '<p style="background:#fef3c7;padding:8px 10px;border-radius:8px">على الآيفون والآيباد التثبيت بيتعمل من متصفح <b>Safari</b> بس. انسخ اللينك وافتحه في Safari.</p>';
+      return h + step(1, 'اضغط زرار <b>المشاركة</b> ' + SHARE_SVG + ' (تحت في نص الشاشة على الآيفون، أو فوق على اليمين في الآيباد).')
+        + step(2, 'انزل في القايمة واختار <b>«إضافة إلى الشاشة الرئيسية»</b> (Add to Home Screen).')
+        + step(3, 'اضغط <b>«إضافة»</b> فوق. هتلاقي أيقونة «مكتبة أحكام» على الشاشة الرئيسية، وتفتح كتطبيق كامل.');
+    }
+    if (isAndroid) return step(1, 'اضغط على قايمة كروم <b>⋮</b> فوق على اليمين.') + step(2, 'اختار <b>«تثبيت التطبيق»</b> أو <b>«إضافة إلى الشاشة الرئيسية»</b>.') + step(3, 'اضغط <b>«تثبيت»</b>. الأيقونة هتظهر مع باقي التطبيقات.');
+    return step(1, 'في كروم أو إيدج: اضغط أيقونة التثبيت <b>⊕</b> اللي في آخر شريط العنوان فوق.') + step(2, 'أو من القايمة <b>⋮</b> ← <b>«حفظ ومشاركة»</b> ← <b>«تثبيت الصفحة كتطبيق»</b>.') + step(3, 'اضغط <b>«تثبيت»</b>. البرنامج هيفتح في شباك لوحده، وهيبقى ليه أيقونة على سطح المكتب.');
+  }
+  window.__appInstall = async function(){
+    if (isStandalone()) { bar('appInstBar', '<div><b>✅ البرنامج متثبّت بالفعل</b> وشغال كتطبيق على الجهاز ده.</div>', '#0f3d2e'); return; }
+    if (deferred && hosted) {
+      try { deferred.prompt(); var ch = await deferred.userChoice; deferred = null; refreshInstallUI(); if (ch && ch.outcome === 'accepted') return; } catch(e) {}
+    }
+    var old = document.getElementById('appInstallGuide'); if (old) old.remove();
+    var ov = el('<div id="appInstallGuide" style="position:fixed;inset:0;z-index:100002;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:16px;direction:rtl"></div>');
+    ov.innerHTML = '<div style="background:#fff;color:#0f172a;border-radius:18px;max-width:440px;width:100%;max-height:90vh;overflow:auto;padding:18px 18px 14px;font-family:inherit;font-size:15px;line-height:1.8;box-shadow:0 20px 50px rgba(0,0,0,.3)">'
+      + '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px"><img src="icon-192.png" onerror="this.style.display=\'none\'" style="width:44px;height:44px;border-radius:10px"><div><b style="font-size:17px">تثبيت «مكتبة أحكام» كتطبيق</b><div style="font-size:12px;color:#64748b">' + (isIOS ? 'آيفون / آيباد' : isAndroid ? 'أندرويد' : 'كمبيوتر') + ' — بيشتغل من غير نت وبيتحدث لوحده</div></div></div>'
+      + guideHtml()
+      + '<div style="text-align:left;margin-top:10px"><button style="border:0;border-radius:10px;padding:8px 18px;font:inherit;font-weight:700;background:#1e3a8a;color:#fff;cursor:pointer" onclick="document.getElementById(\'appInstallGuide\').remove()">تمام</button></div></div>';
+    ov.addEventListener('click', function(e){ if (e.target === ov) ov.remove(); });
+    document.body.appendChild(ov);
+  };
+  function refreshInstallUI(){
+    var host = document.querySelector('.app-header-controls');
+    var b = document.getElementById('appInstallBtn');
+    if (isStandalone()) { if (b) b.remove(); return; }
+    if (!host) return;
+    if (!b) {
+      b = document.createElement('button'); b.id = 'appInstallBtn'; b.type = 'button'; b.title = 'تثبيت البرنامج كتطبيق على الموبايل أو التابلت أو الكمبيوتر';
+      b.innerHTML = '📲<span class="inst-l"> تثبيت التطبيق</span>';
+      b.style.cssText = 'border:1px solid rgba(255,255,255,.45);background:#16a34a;color:#fff;border-radius:10px;height:38px;padding:0 12px;cursor:pointer;font:inherit;font-size:13px;font-weight:700;white-space:nowrap';
+      b.onclick = function(){ window.__appInstall(); };
+      host.insertBefore(b, host.firstChild);
+    }
+  }
+  window.addEventListener('load', function(){ setTimeout(refreshInstallUI, 1200); });
+  setInterval(refreshInstallUI, 4000);
+  // أول مرة على موبايل/تابلت من اللينك: تذكير صغير بالتثبيت
+  window.addEventListener('load', function(){
+    setTimeout(function(){
+      try {
+        if (!hosted || isStandalone() || !(isIOS || isAndroid)) return;
+        if (localStorage.getItem('appInstallHint_v1') === '1') return;
+        localStorage.setItem('appInstallHint_v1', '1');
+        bar('appInstHint', '<div><b>📲 ثبّت البرنامج على جهازك</b><br>هيبقى ليه أيقونة زي أي تطبيق، ويفتح من غير نت.</div><button ' + BTN + ' onclick="this.parentNode.remove();window.__appInstall()">تثبيت</button>', '#1e3a8a');
+      } catch(e) {}
+    }, 7000);
   });
   /* رقم الإصدار في أسفل الشاشة (للمتابعة) */
   window.addEventListener('load', function(){
