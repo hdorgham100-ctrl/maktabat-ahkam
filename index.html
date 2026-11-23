@@ -42755,6 +42755,274 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 
 <script id="olia-roll-adapter">
 /* ===== محوّل رولات المحكمة الإدارية العليا ===== */
+/* ===== تهيئة شكل رولات الدوائر قبل الاستخراج =====
+ * 1) ورقة فيها أكتر من جدول جنب بعض (رول | رقم الدعوى | ... ثم رول | رقم الدعوى | ...)
+ *    → كل جدول في ورقة لوحده باسم الجلسة بتاعته (الجداول الفاضية بتتشال).
+ * 2) ملف من غير صف عناوين (أول صف = أول دعوى) → يتضاف صف عناوين حسب محتوى كل عمود.
+ * 3) عناوين عامة «عمود1 .. عمود9» → تتشال ويتحدد كل عمود من محتواه.
+ * القيم نفسها (وتنسيق التواريخ) بتتنقل زي ما هي بدون أي تعديل.
+ */
+(function (root) {
+  'use strict';
+  var EPOCH = Date.UTC(1899, 11, 30);
+  function lat(s) { return String(s == null ? '' : s).replace(/[٠-٩]/g, function (c) { return '٠١٢٣٤٥٦٧٨٩'.indexOf(c); }); }
+  function nh(h) { return lat(h).replace(/[\s‏‎]+/g, '').replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه'); }
+  function cellText(c) {
+    if (!c) return '';
+    if (c.t === 'd' && c.v instanceof Date) return dmy(c.v.getTime());
+    if (c.w != null && c.t !== 'n') return String(c.w);
+    return c.v == null ? '' : String(c.v);
+  }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function dmy(ms) { var d = new Date(ms); return pad(d.getUTCDate()) + '-' + pad(d.getUTCMonth() + 1) + '-' + d.getUTCFullYear(); }
+  function fixLocal(dt) { return Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()) + (dt.getHours() >= 12 ? 86400000 : 0); }
+  /* يرجّع مفتاح التاريخ «dd-mm-yyyy» أو null */
+  function dateKey(c) {
+    if (!c) return null;
+    if (c.t === 'd' && c.v instanceof Date && !isNaN(c.v)) return dmy(fixLocal(c.v));
+    if (c.t === 'n' && typeof c.v === 'number' && c.v > 36000 && c.v < 60000) {
+      var z = String(c.z || c.w || '');
+      if (/[dmy]/i.test(z) || /\d+[\/\-.]\d+[\/\-.]\d+/.test(String(c.w || ''))) return dmy(EPOCH + Math.round(c.v) * 86400000);
+      return null;
+    }
+    var s = lat(cellText(c)).trim(), m;
+    if ((m = s.match(/^(\d{1,2})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{4})$/))) return pad(+m[1]) + '-' + pad(+m[2]) + '-' + m[3];
+    if ((m = s.match(/^(\d{4})\s*[\/\-.]\s*(\d{1,2})\s*[\/\-.]\s*(\d{1,2})$/))) return pad(+m[3]) + '-' + pad(+m[2]) + '-' + m[1];
+    return null;
+  }
+  function isEmpty(c) { return !c || cellText(c).trim() === ''; }
+  function intVal(c) { if (!c) return null; var s = lat(cellText(c)).trim(); return /^\d+$/.test(s) ? +s : null; }
+
+  /* ===== أدوار الأعمدة من العنوان ===== */
+  var START_RE = /^(رول|تتابع|م|مسلسل|م\.)$/;
+  var HDR_HINT = /رقم|الدعوي|المدعي|الخصوم|الجلس|القرار|رول|تتابع|السنه|سنه|المنطوق|الطاعن|المطعون/;
+  function isNumHeader(h) { var n = nh(h); return /^(?:ال)?دعوي?رقم$|^رقم(?:ال)?دعو|^رقم(?:ال)?طعن|^رقم(?:ال)?قضي/.test(n) || n === 'الدعويرقم'; }
+
+  function rangeOf(ws) { return root.XLSX.utils.decode_range(ws['!ref']); }
+  function addr(r, c) { return root.XLSX.utils.encode_cell({ r: r, c: c }); }
+  function at(ws, r, c) { return ws[addr(r, c)]; }
+
+  function findHeaderRow(ws, rg) {
+    for (var r = rg.s.r; r <= Math.min(rg.e.r, rg.s.r + 6); r++) {
+      var hits = 0, hasNum = false;
+      for (var c = rg.s.c; c <= rg.e.c; c++) { var t = cellText(at(ws, r, c)); if (!t) continue; if (HDR_HINT.test(nh(t))) hits++; if (isNumHeader(t)) hasNum = true; }
+      if (hasNum && hits >= 3) return r;
+    }
+    return -1;
+  }
+  function isGenericHeader(ws, r, rg) {
+    var n = 0, g = 0;
+    for (var c = rg.s.c; c <= rg.e.c; c++) { var t = nh(cellText(at(ws, r, c))); if (!t) continue; n++; if (/^(عمود|column|col)\d+$/i.test(t)) g++; }
+    return n >= 3 && g / n >= 0.8;
+  }
+  /* صف بيانات «دعوى»: مسلسل رقم + رقم دعوى + سنة صغيرة + اسم */
+  function looksDataRow(ws, r, c0) {
+    var a = intVal(at(ws, r, c0)), b = intVal(at(ws, r, c0 + 1)), y = intVal(at(ws, r, c0 + 2));
+    var nm = cellText(at(ws, r, c0 + 3));
+    return a !== null && b !== null && y !== null && y >= 1 && y <= 99 && /[؀-ۿ]{2}/.test(nm);
+  }
+
+  /* ===== تحديد أدوار الأعمدة من المحتوى (للملفات اللي من غير عناوين) ===== */
+  function colStats(ws, rows, c) {
+    var st = { n: 0, filled: 0, date: 0, top: null, topN: 0, hukm: 0, type: 0, ruling: 0, jtype: 0, smallInt: 0, marker: 0, day: 0 };
+    var cnt = {};
+    rows.forEach(function (r) {
+      st.n++;
+      var cl = at(ws, r, c); if (isEmpty(cl)) return;
+      st.filled++;
+      var dk = dateKey(cl), t = cellText(cl).trim(), tn = nh(t);
+      if (dk) { st.date++; cnt[dk] = (cnt[dk] || 0) + 1; }
+      if (/^(حكم|جلس|احال|وقف|شطب|مد ?اجل|اعاد|للقرار|حجز|تقرير|ضم)/.test(tn)) st.hukm++;
+      if (/^(موضوع|بدلات|وقف ?تنفيذ|مستعجل|تسويات|افراد|ترقي|الغاء)/.test(tn) && t.length < 25) st.type++;
+      if (/حكمت|المحكم/.test(tn) && t.length > 20) st.ruling++;
+      if (t.length < 30 && /^(رفض|الغاء|احقي|عدم|قبول|انتهاء|اعتبار|ترك|بطلان|تعويض|وقف)/.test(tn)) st.jtype++;
+      var iv = intVal(cl); if (iv !== null && iv > 0 && iv < 1000) st.smallInt++;
+      if (/^(جديد|معاد|وقف|خبير|ش ?خ|مرحل|محال|مكرر)/.test(tn)) st.marker++;
+      if (/^(السبت|الاحد|الاثنين|الثلاثاء|الاربعاء|الخميس)$/.test(tn)) st.day++;
+    });
+    for (var k in cnt) if (cnt[k] > st.topN) { st.topN = cnt[k]; st.top = k; }
+    return st;
+  }
+  function topShare(ws, rows, c) {
+    var cnt = {}, n = 0, best = 0;
+    rows.forEach(function (r) { var t = cellText(at(ws, r, c)).trim(); if (!t || t.length > 30) return; n++; cnt[t] = (cnt[t] || 0) + 1; if (cnt[t] > best) best = cnt[t]; });
+    return n ? best / rows.length : 0;
+  }
+  /* نوع الدعوى الغالب في الجدول (بدلات / موضوعى ...) عشان اسم الورقة */
+  function blockKind(ws, rows, c0, c1, hdr) {
+    for (var c = c0; c <= c1; c++) {
+      if (!/نوعالدعو/.test(nh(hdr[c] || ''))) continue;
+      var cnt = {}, best = '', bn = 0;
+      rows.forEach(function (r) { var t = cellText(at(ws, r, c)).replace(/\s+/g, ' ').trim(); if (!t || t.length > 20) return; cnt[t] = (cnt[t] || 0) + 1; if (cnt[t] > bn) { bn = cnt[t]; best = t; } });
+      if (bn / rows.length > 0.6 && !/^(السبت|الاحد|الأحد|الاثنين|الثلاثاء|الاربعاء|الأربعاء|الخميس)$/.test(best)) return best;
+    }
+    return '';
+  }
+  function inferHeaders(ws, rows, c0, c1) {
+    var H = {}; H[c0] = 'م'; H[c0 + 1] = 'رقم الدعوى'; H[c0 + 2] = 'السنة'; H[c0 + 3] = 'المدعى'; H[c0 + 4] = 'المدعى عليه';
+    var st = {}, c, sessionCol = null, sessionDate = null, used = {};
+    for (c = c0 + 5; c <= c1; c++) st[c] = colStats(ws, rows, c);
+    var isJudg = false, rulingCol = null;
+    for (c = c0 + 5; c <= c1; c++) if (st[c].filled && st[c].ruling / st[c].filled > 0.5) { rulingCol = c; isJudg = true; break; }
+    if (isJudg) {
+      H[rulingCol] = 'منطوق الحكم';
+      for (c = c0 + 5; c <= c1; c++) {
+        if (H[c]) continue; var s = st[c]; if (!s.filled) continue;
+        if (s.date / s.filled > 0.7 && !used.jd) { H[c] = 'تاريخ صدور الحكم'; used.jd = 1; if (s.topN / s.filled > 0.97) sessionDate = s.top; }
+        else if (s.jtype / s.filled > 0.5 && !used.jt) { H[c] = 'نوع الحكم'; used.jt = 1; }
+        else if ((s.smallInt / s.filled > 0.9 || (s.topN === 0 && topShare(ws, rows, c) > 0.8)) && !used.cir) { H[c] = 'الدائرة'; used.cir = 1; }
+      }
+    } else {
+      // عمود «جلسة اليوم»: تاريخ واحد ثابت تقريباً في كل الصفوف
+      for (c = c1; c >= c0 + 5; c--) { var s1 = st[c]; if (s1.n && s1.topN / s1.n >= 0.9) { sessionCol = c; sessionDate = s1.top; H[c] = 'جلسة اليوم'; break; } }
+      for (c = c0 + 5; c <= c1; c++) {
+        if (H[c]) continue; var s2 = st[c]; if (!s2.filled) continue;
+        if (s2.type / s2.filled > 0.6 && !used.type) { H[c] = 'نوع الدعوى'; used.type = 1; continue; }
+        if (s2.hukm / s2.filled > 0.6 && !used.dec) { H[c] = 'القرار'; used.dec = 1; continue; }
+        if ((s2.date + s2.marker) / s2.filled > 0.6 || /معاد|احكام/.test(cellText(at(ws, rows[0], c)))) {
+          if (!used.prev) { H[c] = 'الجلسة السابقة'; used.prev = 1; continue; }
+          if (!used.next) { H[c] = 'الجلسة القادمة'; used.next = 1; continue; }
+        }
+        if (s2.date / s2.filled > 0.6 && used.prev && !used.next) { H[c] = 'الجلسة القادمة'; used.next = 1; continue; }
+      }
+      // ترتيب الرول المعتاد: السابقة ثم القادمة ثم القرار — لو القادمة فاضية خالص (رول جلسة لسه ما اتعقدتش)
+      if (used.prev && !used.next) for (c = c0 + 6; c <= c1; c++) if (!H[c] && !st[c].filled) { H[c] = 'الجلسة القادمة'; used.next = 1; break; }
+      if (!used.dec) for (c = c0 + 5; c <= c1; c++) if (!H[c] && !st[c].filled) { H[c] = 'القرار'; used.dec = 1; break; }
+    }
+    var nn = 0;
+    for (c = c0 + 5; c <= c1; c++) if (!H[c] && st[c].filled) { nn++; H[c] = nn === 1 ? 'ملاحظات' : 'ملاحظات ' + nn; }
+    return { H: H, judg: isJudg, sessionDate: sessionDate };
+  }
+
+  /* ===== بناء ورقة جديدة من نطاق أعمدة ===== */
+  var PARTY_RE = /^(ال)?مدع[يى]$|^(ال)?مدع[يى]\s*علي|^الخصوم$|^الطاعن|^المطعون/;
+  function buildSheet(ws, hdr, rows, c0, c1, keepCol) {
+    var X = root.XLSX, out = {}, R = 0, maxC = 0, cols = [];
+    for (var c = c0; c <= c1; c++) if (keepCol(c)) cols.push(c);
+    // «الخصوم» = المدعى عليه
+    cols.forEach(function (c) { if (/^الخصوم$/.test(String(hdr[c] || '').trim())) hdr[c] = 'المدعى عليه'; });
+    // أسماء الإكسيل معتمدة: ما يتعملهاش «تصحيح أسماء»
+    var names = [];
+    cols.forEach(function (c) { if (PARTY_RE.test(String(hdr[c] || '').trim())) rows.forEach(function (r) { var t = cellText(at(ws, r, c)).trim(); if (t) names.push(t); }); });
+    try { if (names.length && root.__oliaNorm && root.__oliaNorm.addCleanNames) root.__oliaNorm.addCleanNames(names); } catch (e) {}
+    cols.forEach(function (c, j) { out[addr(0, j)] = { t: 's', v: hdr[c] }; });
+    rows.forEach(function (r) {
+      R++;
+      cols.forEach(function (c, j) { var cl = at(ws, r, c); if (cl) { var cp = {}; for (var k in cl) cp[k] = cl[k]; out[addr(R, j)] = cp; } });
+    });
+    maxC = cols.length - 1;
+    out['!ref'] = X.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: Math.max(R, 1), c: Math.max(maxC, 0) } });
+    if (ws['!cols']) out['!cols'] = cols.map(function (c) { return ws['!cols'][c] || {}; });
+    return out;
+  }
+  function caseRows(ws, from, to, numCol) {
+    var out = [];
+    for (var r = from; r <= to; r++) { var t = lat(cellText(at(ws, r, numCol))); if (/\d/.test(t) && !/[؀-ۿ]{3}/.test(t)) out.push(r); }
+    return out;
+  }
+  function hasDateInName(n) { return /\d{1,2}\s*[\-\/.]\s*\d{1,2}\s*[\-\/.]\s*\d{4}/.test(lat(n)); }
+
+  /* تاريخ الجلسة لجدول: عمود «جلسة اليوم/جلسة حكم/تاريخ الجلسة» أو عمود تاريخ ثابت في كل الصفوف */
+  function blockSession(ws, rows, c0, c1, hdr) {
+    var best = null, bestPri = 9;
+    for (var c = c0; c <= c1; c++) {
+      var h = nh(hdr[c] || ''); if (!h) continue;
+      var pri = /جلس[هة]?اليوم|اليوم/.test(h) ? 0 : /جلس[هة]?(ال)?حكم|تاريخ(ال)?حكم/.test(h) ? 1 : /تاريخ(ال)?جلس/.test(h) ? 2 : /السابق|الماضي|الجسه/.test(h) ? 3 : 9;
+      if (pri === 9) continue;
+      var st = colStats(ws, rows, c);
+      if (st.n && st.topN / st.n >= (pri === 0 ? 0.5 : 0.85) && pri < bestPri) { best = { col: c, date: st.top, pri: pri }; bestPri = pri; }
+    }
+    return best;
+  }
+
+  function fixSheet(ws, name) {
+    if (!ws || !ws['!ref']) return null;
+    var rg = rangeOf(ws);
+    var hr = findHeaderRow(ws, rg);
+    if (hr >= 0) {
+      // جداول جنب بعض؟
+      var starts = [];
+      for (var c = rg.s.c; c <= rg.e.c; c++) { var t = nh(cellText(at(ws, hr, c))); if (START_RE.test(t) && isNumHeader(cellText(at(ws, hr, c + 1)))) starts.push(c); }
+      if (starts.length < 2) return null;
+      var hdr = {}; for (c = rg.s.c; c <= rg.e.c; c++) hdr[c] = cellText(at(ws, hr, c)).replace(/\s+/g, ' ').trim();
+      var parts = [];
+      starts.forEach(function (s, k) {
+        var e = (k + 1 < starts.length ? starts[k + 1] : rg.e.c + 1) - 1;
+        while (e > s && !hdr[e]) e--;
+        var rows = caseRows(ws, hr + 1, rg.e.r, s + 1);
+        if (!rows.length) return;
+        var judg = /تتابع/.test(nh(hdr[s])) || (function () { for (var q = s; q <= e; q++) if (/منطوق|قرارالاعاد/.test(nh(hdr[q]))) return true; return false; })();
+        var ses = blockSession(ws, rows, s, e, hdr);
+        var h2 = {}; for (var q = s; q <= e; q++) h2[q] = hdr[q];
+        // رول الدائرة: «الجلسه السابقه» ثابتة في كل الصفوف = تاريخ الجلسة نفسها
+        if (ses && ses.pri === 3) h2[ses.col] = 'جلسة اليوم';
+        // تصحيح عناوين مكتوبة غلط عشان البرنامج يعرف إنها تواريخ («الجلسه القامه»، «الجسه السابقه»)
+        var hasToday = false; for (q = s; q <= e; q++) if (/^جلس[هة]اليوم$/.test(nh(h2[q] || ''))) hasToday = true;
+        for (q = s; q <= e; q++) {
+          var hn = nh(h2[q] || '');
+          if (/^(ال)?جل?س[هة](ال)?(سابق|ماضي)/.test(hn)) h2[q] = 'الجلسة السابقة';
+          else if (/^(ال)?جلس[هة](ال)?(قا?د?م|مقبل)/.test(hn)) h2[q] = 'الجلسة القادمة';
+          else if (/^جلس[هة]اليوم$/.test(hn)) h2[q] = 'جلسة اليوم';
+          else if (!judg && hasToday && /^تاريخ(ال)?جلس[هة]$/.test(hn)) h2[q] = 'الجلسة السابقة';
+        }
+        if (judg) for (q = s; q <= e; q++) {
+          var hq = nh(h2[q] || '');
+          if (/^جلس[هة]?(ال)?حكم$/.test(hq)) h2[q] = 'تاريخ صدور الحكم';
+          else if (hq === 'المنطوق') h2[q] = 'منطوق الحكم';
+        }
+        var kind = judg ? '' : blockKind(ws, rows, s, e, h2);
+        var label = (judg ? 'أحكام' : 'جلسة') + ' ' + (ses ? ses.date : ('جزء ' + (k + 1))) + (kind ? ' ' + kind : '');
+        parts.push({ ws: buildSheet(ws, h2, rows, s, e, function (cc) { return !!h2[cc]; }), label: label, rows: rows.length });
+      });
+      return parts.length ? parts : [];
+    }
+    // من غير عناوين (أو «عمود1..عمودN»)
+    var first = rg.s.r, generic = false;
+    if (isGenericHeader(ws, first, rg)) { generic = true; first++; }
+    var dataStart = -1;
+    for (var r = first; r <= Math.min(rg.e.r, first + 3); r++) if (looksDataRow(ws, r, rg.s.c)) { dataStart = r; break; }
+    if (dataStart < 0) return null;
+    var rows2 = caseRows(ws, dataStart, rg.e.r, rg.s.c + 1);
+    if (!rows2.length) return null;
+    var lastC = rg.s.c; for (var cc = rg.e.c; cc >= rg.s.c; cc--) { if (rows2.some(function (rr) { return !isEmpty(at(ws, rr, cc)); })) { lastC = cc; break; } }
+    var inf = inferHeaders(ws, rows2, rg.s.c, lastC);
+    var kind2 = inf.judg ? '' : blockKind(ws, rows2, rg.s.c, lastC, inf.H);
+    var label2 = (inf.judg ? 'أحكام' : 'جلسة') + (inf.sessionDate ? ' ' + inf.sessionDate : '') + (kind2 ? ' ' + kind2 : '');
+    return [{ ws: buildSheet(ws, inf.H, rows2, rg.s.c, lastC, function (c) { return !!inf.H[c] || c <= rg.s.c + 4 || rows2.some(function (rr) { return !isEmpty(at(ws, rr, c)); }); }), label: label2, rows: rows2.length, single: true, generic: generic }];
+  }
+
+  function fixWorkbook(X, wb, fileName) {
+    if (!wb || !wb.SheetNames || !wb.Sheets || wb.__layoutDone) return wb;
+    root.XLSX = root.XLSX || X;
+    var names = wb.SheetNames.slice(), changed = false, newNames = [], newSheets = {}, report = [];
+    function put(n, ws) { var b = n, k = 2; while (newSheets[n]) n = b + ' (' + (k++) + ')'; newSheets[n] = ws; newNames.push(n); return n; }
+    names.forEach(function (sn) {
+      var ws = wb.Sheets[sn], res = null;
+      try { res = fixSheet(ws, sn); } catch (e) { try { console.warn('layout', sn, e); } catch (e2) {} res = null; }
+      if (!res) { put(sn, ws); return; }
+      changed = true;
+      if (!res.length) { report.push({ from: sn, dropped: true }); return; }
+      var base = String(sn).replace(/\s{2,}/g, ' ').trim();
+      res.forEach(function (p) {
+        var nm;
+        if (p.single) nm = (names.length === 1 && /^(sheet|ورقة|ورقه)\s*\d*$/i.test(base)) ? p.label : (hasDateInName(base) ? base : base + ' - ' + p.label);
+        else nm = base + ' - ' + p.label;
+        nm = put(nm.replace(/[\\\/?*\[\]:]/g, '-'), p.ws);
+        report.push({ from: sn, to: nm, rows: p.rows });
+      });
+    });
+    wb.__layoutDone = true;
+    if (!changed) return wb;
+    wb.SheetNames = newNames; wb.Sheets = newSheets;
+    if (wb.Workbook && wb.Workbook.Sheets) wb.Workbook.Sheets = newNames.map(function (n) { return { name: n, Hidden: 0 }; });
+    wb.__layoutReport = { file: fileName || '', sheets: report };
+    return wb;
+  }
+  var api = { fixWorkbook: fixWorkbook, _dateKey: dateKey };
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  else root.__layoutNorm = api;
+})(typeof window !== 'undefined' ? window : this);
+
 /* ===== توحيد رولات المحكمة الإدارية العليا (وأي رول بصيغة طاعن/مطعون ضده أو مقامه من/ضد) =====
    بيحوّل كل ورقة لجدول موحّد بأعمدة البرنامج:
    م | رقم الدعوي | ق | المدعي | المدعي عليه | الجلسة السابقة | نوع القرار | الجلسة القادمة | + كل باقي البيانات
@@ -43181,7 +43449,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
     var hasData = names.some(function (n) { return /^بيانات/.test(String(n).trim()); });
     return names.filter(function (n) { var nm = String(n).trim(); if (/^QR/i.test(nm) || /باركود/.test(nm)) return false; if (hasData && /^اجند|^أجند/.test(nm)) return false; return true; });
   }
-  var api = { takeCleanNames: function () { var a = CLEAN_NAMES; CLEAN_NAMES = []; return a; }, normalizeWorkbook: normalizeWorkbook, normalizeAoa: normalizeAoa, filterSheetNames: filterSheetNames, parseDateSerial: parseDateSerial, splitNumbers: splitNumbers, partyFor: partyFor };
+  var api = { addCleanNames: function (a) { for (var i = 0; i < a.length; i++) CLEAN_NAMES.push(a[i]); }, takeCleanNames: function () { var a = CLEAN_NAMES; CLEAN_NAMES = []; return a; }, normalizeWorkbook: normalizeWorkbook, normalizeAoa: normalizeAoa, filterSheetNames: filterSheetNames, parseDateSerial: parseDateSerial, splitNumbers: splitNumbers, partyFor: partyFor };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.__oliaNorm = api;
 })(typeof window !== 'undefined' ? window : this);
@@ -43213,13 +43481,15 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
         try {
           var o2 = {}; for (var k in opts) if (k !== 'bookSheets') o2[k] = opts[k];
           var full = orig.call(this, data, o2);
+          try { window.__layoutNorm.fixWorkbook(X, full, window.__oliaCurFile || ''); } catch(e0) { console.warn('layout', e0); }
           window.__oliaNorm.normalizeWorkbook(X, full, window.__oliaCurFile || '');
           absorbClean();
-          if (full.__oliaDone) return full;
+          if (full.__oliaDone || full.__layoutReport) return full;
         } catch(e) { console.warn('olia (names)', e); }
         return orig.apply(this, arguments);
       }
       var wb = orig.apply(this, arguments);
+      try { window.__layoutNorm.fixWorkbook(X, wb, window.__oliaCurFile || ''); } catch(e0) { console.warn('layout', e0); }
       try {
         window.__oliaNorm.normalizeWorkbook(X, wb, window.__oliaCurFile || '');
         absorbClean();
@@ -43839,7 +44109,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 /* ===== التحديث التلقائي من جيت هاب + التثبيت كتطبيق + نقل البيانات ===== */
 (function(){
   'use strict';
-  var APP_VERSION = 53;
+  var APP_VERSION = 54;
   var HOME = 'https://hdorgham100-ctrl.github.io/maktabat-ahkam/';               // رابط البرنامج على جيت هاب
   window.__APP_VERSION = APP_VERSION;
   window.__APP_HOME = HOME;
