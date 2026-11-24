@@ -26523,6 +26523,18 @@ hideLoadingOverlay();
                 if (letter !== 'all') pool = pool.filter(r => detectSectionLetter(r) === letter);
                 const byMonth = new Map();
                 pool.forEach(r => { const mk = __agMonthKeyOf(r); if (!mk) return; if (!byMonth.has(mk)) byMonth.set(mk, []); byMonth.get(mk).push(r); });
+                if (!window.__agendaFocusDate) { try { window.__agendaFocusDate = localStorage.getItem('agendaFocus_v1') || null; } catch (e) {} }
+                if (window.__agendaFocusDate && !year) {
+                    const fd = parseAgendaDate(window.__agendaFocusDate);
+                    if (fd) {
+                        const fmk = fd.getFullYear() + '-' + String(fd.getMonth() + 1).padStart(2, '0');
+                        window.__agendaShowPast = fmk < curKey;
+                        window.__agendaMonthSel = fmk;
+                        window.__agendaDateSel = fd.getDate() + '/' + (fd.getMonth() + 1) + '/' + fd.getFullYear();
+                        window.__agendaView = 'day';
+                    }
+                    window.__agendaFocusDate = null; try { localStorage.removeItem('agendaFocus_v1'); } catch (e) {}
+                }
                 const showPast = !year && !!window.__agendaShowPast;
                 const allKeys = Array.from(byMonth.keys()).sort();
                 let keys = year ? allKeys : (showPast ? allKeys.filter(k => k < curKey).reverse() : allKeys.filter(k => k >= curKey));
@@ -44207,13 +44219,37 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
     return gov ? 'favorable' : 'against';
   };
 })();
+/* ===== بعد حفظ رول في القاعدة: الأجندة تفتح على جلسة الرول ده ===== */
+(function(){
+  function focusFromRows(){
+    try {
+      var rows = (typeof window.__getExportRows === 'function') ? window.__getExportRows() : [];
+      var cnt = {}, best = '', bn = 0;
+      rows.forEach(function(r){
+        var v = String(r['تاريخ الجلسة'] || r['تاريخ جلسة الرول'] || r['تاريخ صدور الحكم'] || '').replace(/[٠-٩]/g, function(d){ return '٠١٢٣٤٥٦٧٨٩'.indexOf(d); }).trim();
+        var m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(v) || null, k = '';
+        if (m) k = (+m[3]) + '/' + (+m[2]) + '/' + m[1];
+        else if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(v))) k = (+m[1]) + '/' + (+m[2]) + '/' + m[3];
+        if (!k) return; cnt[k] = (cnt[k] || 0) + 1; if (cnt[k] > bn) { bn = cnt[k]; best = k; }
+      });
+      if (best) { window.__agendaFocusDate = best; try { localStorage.setItem('agendaFocus_v1', best); } catch (e2) {} }
+    } catch (e) {}
+  }
+  function wrap(){
+    var f = window.persistCurrentExtractionToMaster;
+    if (typeof f !== 'function' || f.__focus) return;
+    var w = function(){ focusFromRows(); return f.apply(this, arguments); };
+    w.__focus = true; window.persistCurrentExtractionToMaster = w;
+  }
+  wrap(); window.addEventListener('load', wrap); setInterval(wrap, 1500);
+})();
 
 </script>
 <script id="app-update">
 /* ===== التحديث التلقائي من جيت هاب + التثبيت كتطبيق + نقل البيانات ===== */
 (function(){
   'use strict';
-  var APP_VERSION = 55;
+  var APP_VERSION = 56;
   var HOME = 'https://hdorgham100-ctrl.github.io/maktabat-ahkam/';               // رابط البرنامج على جيت هاب
   window.__APP_VERSION = APP_VERSION;
   window.__APP_HOME = HOME;
