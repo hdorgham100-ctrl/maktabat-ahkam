@@ -595,11 +595,12 @@
         its.sort(function(a,b){ return a.x - b.x; });
       }
 
+      var __trSp = (typeof window.__courtMode === 'function' && window.__courtMode() === 'olia') && !(window.__pdfArFixLast && window.__pdfArFixLast.fixed && window.__pdfArFixLast.fixed.length) && its.some(function(i){ return /[\u0600-\u06ff]{2,} [\u0600-\u06ff]{2,}/.test(i.s); }) && its.filter(function(i){ return /^[\u0621-\u064a]$/.test(i.s.trim()); }).length <= 1;
       var out = '', prev = null;
       its.forEach(function(it){
         if (prev) {
           var gap = rtl ? (prev.x - (it.x + it.w)) : (it.x - (prev.x + prev.w));
-          var unit = Math.max(it.h, 8);
+          var unit = __trSp ? Math.max(it.h, 2) : Math.max(it.h, 8);
           var prevChar = out ? out.charAt(out.length - 1) : '';
           var isConn = CONNECTING_ARABIC_CHARS[prevChar];
           var wordThresh = isConn ? (unit * 0.36) : (unit * 0.26);
@@ -616,6 +617,7 @@
         prev = it;
       });
       out = out.replace(/[ \t]+$/,'').replace(/^\s+/,'');
+      if (__trSp && !window.__healExact) { return __exactClean(out.replace(/([\u0621-\u064a])([\u0660-\u0669\d]{1,2}\s*-)/g, '$1 $2')); }
       if (window.__healExact) { var __ec = out.split(/ {2,}/).map(function(x){ return __exactClean(x); }).join('  '); window.__exactTexts.add(__ec); return __ec; }
       return healArabicText(out, false);
     }).filter(function(l){ return l.trim().length > 0; });
@@ -774,6 +776,7 @@
       }
     });
     if (window.__healExact) return __exactClean(joined);
+    if (lines.length && lines.every(function(l){ return window.__exactTexts.has(__exSq(String(l || '').trim())); })) return __exactClean(joined);
     return healArabicText(joined, false);
   }
   function isDataRow(cells) {
@@ -12334,6 +12337,22 @@ var XLSX={};function make_xlsx_lib(a){a.version="0.18.5",a.style_version="1.2.0"
                     if (y >= 1900 && y <= 2100 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) return new Date(y, mo - 1, d, 12, 0, 0);
                 }
                 
+                // 3.5 الشهر مكتوب بالعربي
+                {
+                    const AR_M = [/يناير|كانون الثاني/, /فبراير|شباط/, /مارس|آذار/, /[اأإ]بريل|نيسان/, /مايو|ايار|أيار/, /يوني[وه]|حزيران/, /يولي[وه]|تموز/, /[اأ]غسطس|آب/, /سبتمبر|[اأ]يلول/, /[اأ]كتوبر|تشرين الاول/, /نوف?مبر|نومبر|نوممبر|تشرين الثاني/, /ديسمبر|كانون الاول/];
+                    let mi = -1, mpos = -1;
+                    AR_M.forEach((re, i) => { const mm = re.exec(sName); if (mm && mi < 0) { mi = i; mpos = mm.index; } });
+                    if (mi >= 0) {
+                        const before = sName.slice(0, mpos), after = sName.slice(mpos);
+                        const dm = before.match(/(\d{1,2})(?!.*\d)/) || after.match(/^\S+\s+(\d{1,2})(?:\s|$)/);
+                        const ym = sName.match(/(20\d{2})/);
+                        if (dm) {
+                            const d = Number(dm[1]);
+                            const y = ym ? Number(ym[1]) : new Date().getFullYear();
+                            if (d >= 1 && d <= 31) return new Date(y, mi, d, 12, 0, 0);
+                        }
+                    }
+                }
                 // 4. try DD-MM or MM-DD (no year, fallback to current year)
                 m = sName.match(/(?:^|[^0-9])(\d{1,2})[._\-](\d{1,2})(?:$|[^0-9])/);
                 if (m) {
@@ -18058,6 +18077,11 @@ if (exportAllJudgmentsBtn) exportAllJudgmentsBtn.addEventListener('click', () =>
             }
             
 function determineJudgmentType(rowData) {
+                const __t0 = __determineJudgmentTypeBase(rowData);
+                try { if (typeof window.__oliaJudgAdjust === 'function') return window.__oliaJudgAdjust(rowData, __t0); } catch (e) {}
+                return __t0;
+            }
+            function __determineJudgmentTypeBase(rowData) {
                 /*
                  * قواعد تصنيف أحكام عدم الاختصاص (محدثة):
                  * 
@@ -26267,6 +26291,31 @@ hideLoadingOverlay();
                 return true;
             }
             function __agPrevCell(rec) { const p = __agPrev(rec); return __agIsNewFile(rec) ? 'جديدة' : p; }
+            /* السجل معروض في يوم جلسته هو (مفيش جلسة قادمة بتاريخ) → قراره هو «التسديدة» بتاعة اليوم ده */
+            function __agAtOwn(rec) {
+                if (!rec || rec.__virtual) return false;
+                const e = parseAgendaDate(__agEff(rec)), sd = parseAgendaDate(String(rec.sessionDate || ''));
+                return !!(e && sd && e.getTime() === sd.getTime());
+            }
+            /* التسديدة: القرار اللي اتاخد في الجلسة المعروضة + الجلسة اللي اتأجلت لها */
+            function __agTasdida(rec) {
+                let t = '', nx = '';
+                if (rec.__virtual) {
+                    t = String(rec.__mantooq || '').trim();
+                    const h = Array.isArray(rec.history) && rec.history.length ? rec.history[rec.history.length - 1] : null;
+                    nx = h && h.nextSession ? String(h.nextSession) : '';
+                } else if (__agAtOwn(rec)) {
+                    t = String(getFullDecisionText(rec) || '').trim();
+                    nx = String(rec.nextSession || '');
+                }
+                if (!t) return '';
+                if (nx && parseAgendaDate(nx) && parseAgendaDate(__agEff(rec)) && parseAgendaDate(nx).getTime() === parseAgendaDate(__agEff(rec)).getTime()) nx = '';
+                if (nx && parseAgendaDate(nx) && !/\d{1,4}\s*[\/\-.]\s*\d{1,2}\s*[\/\-.]\s*\d{1,4}/.test(t)) t += '\n⏭ ' + formatDisplayDate(nx, nx);
+                return t;
+            }
+            /* قرار الجلسة السابقة: لو السجل في يوم جلسته، القرار السابق من تاريخه */
+            function __agPrevDecOf(rec) { return __agAtOwn(rec) ? String(__agPrevDecision(rec) || '').trim() : __agDecText(rec); }
+            window.__agTasdida = __agTasdida;
             function __agPrevDecision(rec) {
                 if (rec.history && rec.history.length >= 2) return rec.history[rec.history.length - 2].decision || '';
                 return '';
@@ -26285,7 +26334,7 @@ hideLoadingOverlay();
                 const bar = imp ? '#eab308' : (pal ? pal[1] : 'transparent');
                 const nextD = rec.nextSession || '';
                 const issued = __agIssued(rec) && __agSection(rec) === 'reserved';
-                const isNew = __agIsNewFile(rec); const isRes = (__agSection(rec) === 'reserved'); const prevShow = isNew ? '' : prev; const decInPrev = isRes ? '' : dec;
+                const isNew = __agIsNewFile(rec); const isRes = (__agSection(rec) === 'reserved'); const prevShow = isNew ? '' : prev; const decInPrev = isRes ? '' : __agPrevDecOf(rec);
                 return '<tr class="ag-row' + (imp ? ' ag-imp' : '') + '" data-q="' + escapeHtml(__agNorm([rec.caseNumber, rec.caseCode, rec.plaintiff, rec.defendant, rec.roll].join(' '))) + '" style="' + (bg ? 'background:' + bg + ' !important;' : '') + 'box-shadow:inset -5px 0 0 ' + bar + ';">' +
                     '<td class="ag-c">' + idx + '</td>' +
                     '<td class="ag-c ag-b">' + escapeHtml(resolveAgendaRoll(rec)) + '</td>' +
@@ -26299,7 +26348,7 @@ hideLoadingOverlay();
                     '<td class="ag-l">' + escapeHtml(truncateText(rec.plaintiff || '—', 60)) + '</td>' +
                     '<td class="ag-l">' + escapeHtml(truncateText(rec.defendant || '—', 60)) + '</td>' +
                     '<td class="ag-c ag-prev">' + (isNew ? '<span class="ag-new">✨ جديدة</span>' : (prevShow ? '<span dir="ltr" class="ag-prevd">' + escapeHtml(prevShow) + '</span>' : '')) + (decInPrev ? '<div class="ag-prevdec" style="font-size:.8rem;color:#334155;font-weight:700;margin-top:3px">' + escapeHtml(truncateText(decInPrev, 200)).replace(/\n/g, '<br>') + '</div>' : (!isNew && !prevShow ? '—' : '')) + '</td>' +
-                    '<td class="ag-dec">' + (issued ? '<div class="ag-issued">✅ صدر الحكم' + (rec.judgmentDate ? ' — <span dir="ltr">' + escapeHtml(formatDisplayDate(rec.judgmentDate, String(rec.judgmentDate))) + '</span>' : '') + '</div>' : '') + escapeHtml(truncateText(rec.__virtual ? (rec.__mantooq || (isRes ? dec : '')) : (isRes ? dec : ''), 400)).replace(/\n/g, '<br>') + (isRes ? (__agJudgStatus(rec) ? '<div class="ag-nextd ag-jst">' + escapeHtml(__agJudgStatus(rec)) + '</div>' : (nextD && parseAgendaDate(nextD) && (parseAgendaDate(nextD) || 0).getTime() !== (parseAgendaDate(__agEff(rec)) || 0).getTime() ? '<div class="ag-nextd">⏭ مؤجلة إلى <span dir="ltr">' + escapeHtml(formatDisplayDate(nextD, String(nextD))) + '</span></div>' : '')) : '') + '</td>' +
+                    '<td class="ag-dec">' + (issued ? '<div class="ag-issued">✅ صدر الحكم' + (rec.judgmentDate ? ' — <span dir="ltr">' + escapeHtml(formatDisplayDate(rec.judgmentDate, String(rec.judgmentDate))) + '</span>' : '') + '</div>' : '') + escapeHtml(truncateText(isRes ? (rec.__virtual ? (rec.__mantooq || dec) : dec) : __agTasdida(rec), 400)).replace(/\n/g, '<br>') + (isRes ? (__agJudgStatus(rec) ? '<div class="ag-nextd ag-jst">' + escapeHtml(__agJudgStatus(rec)) + '</div>' : (nextD && parseAgendaDate(nextD) && (parseAgendaDate(nextD) || 0).getTime() !== (parseAgendaDate(__agEff(rec)) || 0).getTime() ? '<div class="ag-nextd">⏭ مؤجلة إلى <span dir="ltr">' + escapeHtml(formatDisplayDate(nextD, String(nextD))) + '</span></div>' : '')) : '') + '</td>' +
                     '<td class="ag-act">' + (rec.__virtual ? '<span title="جلسة سابقة من تاريخ الدعوى" style="font-size:.75rem;color:#64748b">🕘 سابقة</span></td></tr>' : '') + (rec.__virtual ? '' :
                                                 '<button type="button" class="ag-judg-btn ag-ic" data-record-id="' + rec.id + '" title="تسجيل الحكم / المنطوق">⚖️</button>' +
                         '<button type="button" class="agenda-transfer-quick-btn ag-ic" data-record-id="' + rec.id + '" title="ترحيل القضية">↪</button>' +
@@ -26317,7 +26366,7 @@ hideLoadingOverlay();
                 dkeys.forEach(dk => {
                     const items = byDate.get(dk).slice().sort((a, b) => (__AG_GROUP_ORDER.indexOf(__agGroupOf(a, cls)) - __AG_GROUP_ORDER.indexOf(__agGroupOf(b, cls))) || (parseInt(a.roll, 10) || 0) - (parseInt(b.roll, 10) || 0));
                     if (!single) h += '<details class="ag-grp"' + (dkeys.length <= 3 || items.length <= 12 ? ' open' : '') + '><summary><span class="ag-grp-t">📅 ' + escapeHtml(formatAgendaDate(dk)) + ' ' + formatAgendaDaysBadge(calcAgendaDaysRemaining(dk)) + '</span><span class="ag-cnt">' + items.length + '</span></summary>';
-                    h += '<div class="ag-tw"><table class="ag-table"><thead><tr><th>م</th><th>رول</th><th>رقم الدعوى</th><th>ق</th><th>المدعي</th><th>المدعى عليه</th><th>' + (cls === 're' ? 'الجلسة السابقة' : 'الجلسة السابقة وقرارها') + '</th><th>' + (cls === 're' ? 'القرار / سبب التأجيل' : 'المنطوق (يُسجَّل بعد الجلسة)') + '</th><th></th></tr></thead><tbody>';
+                    h += '<div class="ag-tw"><table class="ag-table"><thead><tr><th>م</th><th>رول</th><th>رقم الدعوى</th><th>ق</th><th>المدعي</th><th>المدعى عليه</th><th>' + (cls === 're' ? 'الجلسة السابقة' : 'الجلسة السابقة وقرارها') + '</th><th>' + (cls === 're' ? 'القرار / سبب التأجيل' : 'قرار الجلسة (التسديدة)') + '</th><th></th></tr></thead><tbody>';
                     let lastG = null, n = 0;
                     items.forEach(r => {
                         const g = __agGroupOf(r, cls);
@@ -26362,9 +26411,9 @@ hideLoadingOverlay();
                 const decOf = r => { let d = __agDecText(r); if (__agIssued(r) && __agSection(r) === 'reserved' && r.caseStatus === 'صدر الحكم') d = 'صدر الحكم: ' + d; const st = __agJudgStatus(r); if (st) d += '\n' + st.replace(/^[^\u0600-\u06FF]+/, ''); return d; };
                 if (fmt === 'xlsx') {
                     if (typeof XLSX === 'undefined') { showMessage('مكتبة Excel غير متاحة', 'error'); return; }
-                    const rows = [['م', 'القسم', 'تاريخ الجلسة', 'الرول', 'رقم الدعوى', 'ق', 'المدعي', 'المدعى عليه', 'الجلسة السابقة', 'القرار / المنطوق']];
+                    const rows = [['م', 'القسم', 'تاريخ الجلسة', 'الرول', 'رقم الدعوى', 'ق', 'المدعي', 'المدعى عليه', 'الجلسة السابقة وقرارها', 'القرار / التسديدة']];
                     let n = 0;
-                    secs.forEach(([t, list, nm]) => sortRecs(list).forEach(r => { n++; rows.push([n, nm + ' — ' + (nm === 'محجوز للحكم' ? (resolveCaseCategory(r) || r.caseCategory || 'متنوع') : __agGroupOf(r, nm === 'مرافعة' ? 'pl' : 'co')), formatDisplayDate(__agEff(r), String(__agEff(r))), resolveAgendaRoll(r), r.caseNumber || '', r.caseCode || '', r.plaintiff || '', r.defendant || '', (nm === 'محجوز للحكم' ? __agPrev(r) : (__agPrevCell(r) + (decOf(r) ? ' — ' + decOf(r).replace(/\n/g, ' ') : ''))), (nm === 'محجوز للحكم' ? decOf(r) : '')]); }));
+                    secs.forEach(([t, list, nm]) => sortRecs(list).forEach(r => { n++; rows.push([n, nm + ' — ' + (nm === 'محجوز للحكم' ? (resolveCaseCategory(r) || r.caseCategory || 'متنوع') : __agGroupOf(r, nm === 'مرافعة' ? 'pl' : 'co')), formatDisplayDate(__agEff(r), String(__agEff(r))), resolveAgendaRoll(r), r.caseNumber || '', r.caseCode || '', r.plaintiff || '', r.defendant || '', (nm === 'محجوز للحكم' ? __agPrev(r) : (__agPrevCell(r) + (__agPrevDecOf(r) ? ' — ' + __agPrevDecOf(r).replace(/\n/g, ' ') : ''))), (nm === 'محجوز للحكم' ? decOf(r) : __agTasdida(r).replace(/\n/g, ' '))]); }));
                     const wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet(rows);
                     ws['!cols'] = [{ wch: 5 }, { wch: 12 }, { wch: 13 }, { wch: 7 }, { wch: 11 }, { wch: 7 }, { wch: 30 }, { wch: 30 }, { wch: 13 }, { wch: 50 }];
                     try { wb.Workbook = { Views: [{ RTL: true }] }; } catch (e) {}
@@ -26377,7 +26426,7 @@ hideLoadingOverlay();
                 let body = '<table class="hd"><tr><td class="r">هيئة قضايا الدولة' + (court ? '<br>' + court : '') + (spec ? '<br>' + spec : '') + '</td><td class="c">' + (logo ? '<img src="' + logo + '" width="62" height="62"/>' : '') + (adv ? '<div class="adv">المستشار / ' + adv + '</div>' : '') + (deg ? '<div class="dg">' + deg + '</div>' : '') + '</td><td class="l">تاريخ الاستخراج:<br>' + escapeHtml(formatDisplayDate(new Date().toISOString().slice(0, 10).split('-').reverse().join('/'), '')) + '</td></tr></table>';
                 body += '<div class="ttl">أجندة جلسات ' + escapeHtml(label) + '</div>';
                 secs.forEach(([t, list]) => {
-                    body += '<div class="sh">' + escapeHtml(t) + ' — ' + list.length + ' قضية</div><table class="dt"><colgroup>' + W.map(w => '<col style="width:' + w + '">').join('') + '</colgroup><thead><tr><th>م</th><th>الرول</th><th>رقم الدعوى</th><th>ق</th><th>المدعي</th><th>المدعى عليه</th><th>' + (list === srcSec.reserved ? 'الجلسة السابقة' : 'الجلسة السابقة وقرارها') + '</th><th>' + (list === srcSec.reserved ? 'القرار / المنطوق' : 'المنطوق') + '</th></tr></thead><tbody>';
+                    body += '<div class="sh">' + escapeHtml(t) + ' — ' + list.length + ' قضية</div><table class="dt"><colgroup>' + W.map(w => '<col style="width:' + w + '">').join('') + '</colgroup><thead><tr><th>م</th><th>الرول</th><th>رقم الدعوى</th><th>ق</th><th>المدعي</th><th>المدعى عليه</th><th>' + (list === srcSec.reserved ? 'الجلسة السابقة' : 'الجلسة السابقة وقرارها') + '</th><th>' + (list === srcSec.reserved ? 'القرار / المنطوق' : 'قرار الجلسة (التسديدة)') + '</th></tr></thead><tbody>';
                     let lastDk = null, lastG = null, n = 0;
                     const clsOf = list === srcSec.pleadings ? 'pl' : (list === srcSec.commissioners ? 'co' : 're');
                     sortRecs(list).sort((a, b) => __AG_GROUP_ORDER.indexOf(__agGroupOf(a, clsOf)) - __AG_GROUP_ORDER.indexOf(__agGroupOf(b, clsOf))).forEach(r => {
@@ -26385,7 +26434,7 @@ hideLoadingOverlay();
                         if (g !== lastG) { lastG = g; lastDk = null; if (clsOf !== 're') body += '<tr class="gr"><td colspan="8">' + escapeHtml(g) + '</td></tr>'; }
                         if (dk !== lastDk) { lastDk = dk; body += '<tr class="dr"><td colspan="8">📅 ' + escapeHtml(formatAgendaDate(dk)) + '</td></tr>'; }
                         n++;
-                        body += '<tr><td>' + n + '</td><td>' + escapeHtml(resolveAgendaRoll(r)) + '</td><td><b>' + escapeHtml(r.caseNumber || '') + '</b></td><td>' + escapeHtml(r.caseCode || '') + '</td><td class="t">' + escapeHtml(r.plaintiff || '') + '</td><td class="t">' + escapeHtml(r.defendant || '') + '</td><td>' + (clsOf === 're' ? escapeHtml(__agPrev(r)) : escapeHtml(__agPrevCell(r)) + (__agIsNewFile(r) && !decOf(r) ? '' : '<br>' + escapeHtml(decOf(r)).replace(/\n/g, '<br>'))) + '</td><td class="t">' + (clsOf === 're' ? escapeHtml(decOf(r)).replace(/\n/g, '<br>') : '') + '</td></tr>';
+                        body += '<tr><td>' + n + '</td><td>' + escapeHtml(resolveAgendaRoll(r)) + '</td><td><b>' + escapeHtml(r.caseNumber || '') + '</b></td><td>' + escapeHtml(r.caseCode || '') + '</td><td class="t">' + escapeHtml(r.plaintiff || '') + '</td><td class="t">' + escapeHtml(r.defendant || '') + '</td><td>' + (clsOf === 're' ? escapeHtml(__agPrev(r)) : escapeHtml(__agPrevCell(r)) + (__agPrevDecOf(r) ? '<br>' + escapeHtml(__agPrevDecOf(r)).replace(/\n/g, '<br>') : '')) + '</td><td class="t">' + (clsOf === 're' ? escapeHtml(decOf(r)).replace(/\n/g, '<br>') : escapeHtml(__agTasdida(r)).replace(/\n/g, '<br>')) + '</td></tr>';
                     });
                     body += '</tbody></table>';
                 });
@@ -43075,7 +43124,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
     ['num', /^رقم\s*(?:ال)?(?:طعن|طعون)|^رقم\s*السجل\s*العام|^رقم\s*الطعن\s*\/\s*سن/],
     ['num2', /^رقم\s*(?:ال)?دعو[يىه]|^رقم\s*القضي/],
     ['year', /^(?:ال)?سن[هة]?(?:\s*القضائي[هة])?$|^ق$|^السنه القضائيه$/],
-    ['plaintiff', /^مقام[هة]?\s*من|^الطاعن|^اسم\s*الطاعن|^(?:اسم\s*)?المدع[يى]$|^المدع[يى]ين$|^الطاعنين$/],
+    ['plaintiff', /^مقام[هة]?\s*من|^مقدم[هة]?\s*من|^الطاعن|^اسم\s*الطاعن|^(?:اسم\s*)?المدع[يى]$|^المدع[يى]ين$|^الطاعنين$/],
     ['defendant', /^ضد$|^المطعون\s*ضد|^(?:اسم\s*)?المدع[يى]\s*علي/],
     ['deposit', /تاريخ\s*الايداع/],
     ['address', /^عنوان|^العنوان/],
@@ -43278,6 +43327,8 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
       }
     }
     var outRows = [];
+    var PREV_STMT_HDR = false;
+    for (var cph = 0; cph < ncol; cph++) if (roles[cph] === 'prev' && /البيان|الوارد/.test(normHeader(hdr[cph]))) PREV_STMT_HDR = true;
     var tDate = titleDate(aoa, h);
     var court = titleText(aoa, h);
     for (var i4 = start; i4 < aoa.length; i4++) {
@@ -43316,7 +43367,9 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
         else if (nfd) { if (!ruling) ruling = nfd; else extras['الجلسة القادمة للقرار'] = nfd; }
       }
       var prevOut = rec.prev !== undefined ? dateOut(rec.prev) : '';
-      if (typeof prevOut === 'string' && prevOut && !isSessionMarker(prevOut) && !/^\d/.test(prevOut)) {
+      // «تاريخ الجلسة الماضية / البيان الوارد»: نص زي «حكم 9/3 وقف جزئى» أو «جديد من الفحص» بيان عن اللي فات، مش قرار الجلسة دي
+      var prevKeep = typeof prevOut === 'string' && prevOut && (PREV_STMT_HDR || /^حكم\s*(?:في|فى|بتاريخ)?\s*\d{1,2}\s*\/\s*\d{1,2}|وارد|من\s*الفحص|معاد|محال|مرحل|مكرر/.test(prevOut));
+      if (!prevKeep && typeof prevOut === 'string' && prevOut && !isSessionMarker(prevOut) && !/^\d/.test(prevOut)) {
         if (!decision) decision = normDecision(prevOut); else if (decision.indexOf(prevOut) === -1) decision = decision + ' - ' + prevOut;
         prevOut = '';
       }
@@ -43817,6 +43870,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 (function(){
   'use strict';
   function nh(h){ return String(h||'').replace(/[\u064B-\u0652\u0640]/g,'').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/\s+/g,' ').trim(); }
+  var OLIA_HIT = false;
   function canonHeader(h){
     var n = nh(h);
     if (/^م$/.test(n)) return 'م';
@@ -43827,6 +43881,13 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
     if (/^(?:الجلسه\s*)?السابقه$/.test(n)) return 'الجلسة السابقة';
     if (/^(?:الجلسه\s*)?القادمه$/.test(n)) return 'الجلسة القادمة';
     if (/^(?:نوع\s*)?القرار$/.test(n)) return 'نوع القرار';
+    // رولات المحكمة الإدارية العليا (يومية الجلسات)
+    if (/^رقم\s*(?:ال)?طعن/.test(n)) { OLIA_HIT = true; return 'رقم الدعوي'; }
+    if (/^مقام\s*من|^مقدم\s*من|^الطاعن/.test(n)) { OLIA_HIT = true; return 'المدعي'; }
+    if (/^ضد$|^المطعون\s*ضد/.test(n)) return 'المدعي عليه';
+    if (/^تاريخ\s*الجلسه\s*(?:الماضيه|السابقه)/.test(n)) return 'الجلسة السابقة';
+    if (/^تاريخ\s*الجلسه\s*(?:المقبله|القادمه)/.test(n)) return 'الجلسة القادمة';
+    if (/^بيان\s*القرار|^القرار\s*الصادر/.test(n)) return 'نوع القرار';
     return null;
   }
   function fixTable(t){
@@ -43867,6 +43928,22 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
         H[c2] = 'نوع القرار'; changed = true;
       }
     }
+    // رول العليا اللي لسه ما اتعقدش: خانة «القرار» فيها الموضوع (تراخيص / علامة تجارية ...) والجلسة القادمة فاضية
+    (function(){
+      var di = H.indexOf('نوع القرار'), ni = H.indexOf('الجلسة القادمة');
+      if (di < 0 || H.indexOf('الموضوع') >= 0) return;
+      var TOPIC = /^(?:تراخيص|ترخيص|تسجيل|علام[هة]|توصيل|استرداد|ا?[لإا]لغاء\s*توكيل|ضرائب|جمارك|براء[هة]|ملكي[هة]|نزع\s*ملكي|تعويض|تموين)/;
+      var vals = D.map(function(r){ return nh(r[di]); }).filter(Boolean);
+      if (vals.length < 3) return;
+      var top = vals.filter(function(v){ return TOPIC.test(v); }).length;
+      var nextFilled = ni >= 0 ? D.filter(function(r){ return String(r[ni] || '').trim(); }).length : 0;
+      if (top / vals.length >= 0.8 && nextFilled <= D.length * 0.1) { H[di] = 'الموضوع'; changed = true; }
+    })();
+    if (OLIA_HIT) {
+      // أرقام رولات العليا المطبوعة بالأرقام الهندية → إنجليزي (عشان نفس الطعن من الإكسيل والـPDF يبقى سجل واحد)
+      D.forEach(function(r){ for (var q = 0; q < r.length; q++) if (typeof r[q] === 'string' && /[٠-٩]/.test(r[q])) { r[q] = r[q].replace(/[٠-٩]/g, function(d){ return '٠١٢٣٤٥٦٧٨٩'.indexOf(d); }); changed = true; } });
+    }
+    if (OLIA_HIT) { OLIA_HIT = false; t.__olia = true; try { window.__courtAutoOlia && window.__courtAutoOlia(); } catch (e) {} }
     if (changed) {
       t.headers = H; t.data = D;
       if (Array.isArray(t.allRows)) t.allRows = [H].concat(D);
@@ -43890,7 +43967,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 (function(){
   function caseKeys(rows, getter){
     var s = new Set();
-    rows.forEach(function(r){ var v = String(getter(r) || '').replace(/[^\d\/ ]/g,'').trim(); var m = /(\d{1,7})/.exec(v); if (m) s.add(m[1]); });
+    rows.forEach(function(r){ var v = String(getter(r) || '').replace(/[٠-٩]/g, function(d){ return '٠١٢٣٤٥٦٧٨٩'.indexOf(d); }).replace(/[^\d\/ ]/g,'').trim(); var m = /(\d{1,7})/.exec(v); if (m) s.add(m[1]); });
     return s;
   }
   function wrapG(){
@@ -43908,7 +43985,9 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
         var gk = caseKeys(res.rows, function(r){ return r['رقم الدعوى'] || r['رقم الدعوي'] || r.__originalCaseNumber; });
         var tk = caseKeys(tRows, function(x){ return x; });
         window.__pdfPathChoice = { glyph: gk.size, tables: tk.size };
-        if (tk.size > gk.size * 1.05 && tk.size - gk.size >= 3) { window.__pdfPathChoice.used = 'tables'; return null; }
+        // رول العليا (يومية الجلسات): الجدول بأعمدته الصحيحة أدق من محرك الرموز طالما جاب نفس العدد تقريباً
+        var oliaT = tbls.some(function(t){ return t.__olia; });
+        if ((tk.size > gk.size * 1.05 && tk.size - gk.size >= 3) || (oliaT && tk.size >= gk.size * 0.9 && tk.size > 0)) { window.__pdfPathChoice.used = 'tables'; return null; }
         window.__pdfPathChoice.used = 'glyph';
       } catch (e) { console.warn('pdf path compare', e); }
       return res;
@@ -43968,8 +44047,8 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
 (function(){
   'use strict';
   var KEY = 'courtMode_v1';
-  function get(){ try { return localStorage.getItem(KEY) || 'admin'; } catch(e){ return 'admin'; } }
-  function isSet(){ try { return !!localStorage.getItem(KEY); } catch(e){ return false; } }
+  function get(){ if (window.__COURT_LOCK) return window.__COURT_LOCK; try { return localStorage.getItem(KEY) || 'admin'; } catch(e){ return 'admin'; } }
+  function isSet(){ if (window.__COURT_LOCK) return true; try { return !!localStorage.getItem(KEY); } catch(e){ return false; } }
   var TERMS = [
     [/رقم\s*الدعو[ىي]/g, 'رقم الطعن'],
     [/(اسم\s*)?المدع[ىي]\s*عليهم?/g, 'المطعون ضده'],
@@ -44065,6 +44144,7 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
   /* زرار المفتاح في رأس البرنامج */
   function btnLabel(){ return get() === 'olia' ? '⚖️ <span class="cm-l">الإدارية </span>العليا' : '⚖️ <span class="cm-l">القضاء </span>الإداري'; }
   function addBtn(){
+    if (window.__COURT_LOCK) return;
     var host = document.querySelector('.app-header-controls'); if (!host || document.getElementById('courtModeBtn')) return;
     var b = document.createElement('button'); b.id = 'courtModeBtn'; b.type = 'button';
     b.title = 'تبديل نوع المحكمة (المسميات في الجداول والطباعة: رقم الدعوى/المدعي ↔ رقم الطعن/الطاعن)';
@@ -44104,12 +44184,36 @@ body.dark-mode .mc-filter-drawer, body.dark-mode .mc-advanced{ background:#0f172
   document.addEventListener('DOMContentLoaded', init); window.addEventListener('load', init); setTimeout(init, 1500); setInterval(addBtn, 3000);
 })();
 
+/* ===== تصنيف أحكام الإدارية العليا حسب الطاعن =====
+ * «رفض الطعن / عدم قبوله» = الحكم المطعون فيه باقٍ: لو الطاعن جهة حكومية → ضد، لو فرد → صالح
+ * «إلغاء الحكم المطعون فيه» = الطعن كسب: لو الطاعن جهة حكومية → صالح، لو فرد → ضد */
+(function(){
+  function n(s){ return String(s||'').replace(/[\u064B-\u0652\u0640]/g,'').replace(/[أإآ]/g,'ا').replace(/ى/g,'ي').replace(/ة/g,'ه').replace(/\s+/g,' ').trim(); }
+  var GOV = /^(?:[\d٠-٩]+\s*[-ـ]\s*)?(?:السيد\s*)?(?:محافظ|وزير|رئيس|مدير|وكيل|نائب|امين|مامور|قائد|هيئه|الهيئه|جهاز|الجهاز|مصلحه|النيابه|مجلس|المجلس|الجهه|جامعه|بنك\s*ناصر|الشركه\s*القابضه|شركه\s*[^ ]*\s*القابضه|الحكومه|الدوله|المحافظ|الوزير|ممثل\s*الجهه|اداره|الاداره|محكمه|مديريه|مديرية|المديريه|الادارة|صندوق|الصندوق|جمعيه|بنك)/;
+  function pick(row, keys){ for (var i = 0; i < keys.length; i++) { var v = row && row[keys[i]]; if (v != null && String(v).trim()) return String(v); } return ''; }
+  window.__oliaJudgAdjust = function(row, t){
+    if (!row || (t !== 'favorable' && t !== 'against' && t !== 'unknown' && t)) return t;
+    var olia = (typeof window.__courtMode === 'function' && window.__courtMode() === 'olia');
+    if (!olia) return t;
+    var txt = n(pick(row, ['منطوق الحكم','المنطوق','نوع القرار','القرار','الحكم','بيان القرار']));
+    if (!txt) return t;
+    var failed = /رفض\s*(?:ال)?طعن|برفض(?:ه|هما|هم)?\s*موضوعا|عدم\s*قبول\s*(?:ال)?طعن|بعدم\s*قبول\s*(?:ال)?طعن|عدم\s*جواز\s*(?:نظر\s*)?(?:ال)?طعن|اعتبار\s*(?:ال)?طعن\s*كان\s*لم\s*يكن/.test(txt);
+    var won = /(?:ب)?الغاء\s*الحكم\s*المطعون|بتعديل\s*الحكم\s*المطعون/.test(txt);
+    if (failed === won) return t;
+    var ap = n(pick(row, ['المدعي','الطاعن','مقام من','مقدم من','اسم المدعي','اسم المدعى','اسم الطاعن']));
+    if (!ap) return t;
+    var gov = GOV.test(ap) && !/^(?:[\d]+\s*-\s*)?شركه(?!.*القابضه)/.test(ap);
+    if (failed) return gov ? 'against' : 'favorable';
+    return gov ? 'favorable' : 'against';
+  };
+})();
+
 </script>
 <script id="app-update">
 /* ===== التحديث التلقائي من جيت هاب + التثبيت كتطبيق + نقل البيانات ===== */
 (function(){
   'use strict';
-  var APP_VERSION = 54;
+  var APP_VERSION = 55;
   var HOME = 'https://hdorgham100-ctrl.github.io/maktabat-ahkam/';               // رابط البرنامج على جيت هاب
   window.__APP_VERSION = APP_VERSION;
   window.__APP_HOME = HOME;

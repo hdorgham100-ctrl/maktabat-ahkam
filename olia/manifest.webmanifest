@@ -1,0 +1,26 @@
+{
+  "name": "مكتبة أحكام — المحكمة الإدارية العليا",
+  "short_name": "أحكام العليا",
+  "description": "استخراج وتصنيف الأحكام وإدارة الجلسات والأجندة",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0f1f3d",
+  "theme_color": "#0f1f3d",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
